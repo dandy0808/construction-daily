@@ -1,0 +1,26 @@
+(()=>{'use strict';
+const $=id=>document.getElementById(id),cfg=window.CLOUD_CONFIG||{};
+let token='',userId='',busy=false,uploadTimer=null,lastRemote='';
+const status=t=>{$('cloudStatus').textContent=t};
+const configured=()=>Boolean(cfg.url&&cfg.anonKey&&/^https:\/\//.test(cfg.url));
+async function api(path,{method='GET',body,auth=true,extra={}}={}){
+ const h={'apikey':cfg.anonKey,...extra};if(auth)h.Authorization='Bearer '+token;if(body!==undefined)h['Content-Type']='application/json';
+ const res=await fetch(cfg.url.replace(/\/$/,'')+path,{method,headers:h,body:body===undefined?undefined:JSON.stringify(body)});
+ if(!res.ok){let detail=await res.text();throw Error('서버 오류 '+res.status+': '+detail.slice(0,240))}return res.status===204?null:await res.json();
+}
+const binaryToB64=async blob=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=reject;r.readAsDataURL(blob)});
+const b64ToBlob=(base64,type)=>{const raw=atob(base64),parts=[];for(let i=0;i<raw.length;i+=8192){const a=new Uint8Array(Math.min(8192,raw.length-i));for(let j=0;j<a.length;j++)a[j]=raw.charCodeAt(i+j);parts.push(a)}return new Blob(parts,{type:type||'image/jpeg'})};
+async function snapshot(){const photos=[];for(const r of diaries){for(const p of await getPhotos(r.id)){photos.push({id:p.id,diaryId:p.diaryId,filename:p.filename,caption:p.caption,created:p.created,type:p.blob.type,data:await binaryToB64(p.blob)})}}return {diaries,equip,photos};}
+async function restore(data){if(!Array.isArray(data.diaries)||!Array.isArray(data.equip))throw Error('클라우드 데이터 형식이 올바르지 않습니다');diaries=data.diaries;equip=data.equip;persist();persistEq();for(const p of data.photos||[]){if(!p.id||!p.diaryId||!p.data)continue;await photoStore('readwrite',st=>st.put({id:p.id,diaryId:p.diaryId,filename:p.filename,caption:p.caption,created:p.created,blob:b64ToBlob(p.data,p.type)}))}selected=diaries.at(-1)?.id||null;if(selected)select(selected);else {renderList();renderPhotos()}renderSites();if(selected&&current()?.site!==activeSite)switchSite(activeSite);renderEq();}
+async function login(){if(!configured()){status('cloud-config.js에 Supabase URL과 publishable 키를 먼저 입력하세요.');return}try{status('로그인 중…');const x=await api('/auth/v1/token?grant_type=password',{method:'POST',auth:false,body:{email:$('cloudEmail').value.trim(),password:$('cloudPassword').value}});token=x.access_token;userId=x.user.id;sessionStorage.setItem('cloudSession',JSON.stringify({token,userId}));$('cloudPassword').value='';status('로그인 완료. 처음 연결할 때는 PC 자료 업로드 또는 클라우드 가져오기를 선택하세요.');}catch(e){status('로그인 실패: '+e.message)}}
+async function upload(quiet=false){if(!token){if(!quiet)status('먼저 로그인하세요.');return}if(busy)return;busy=true;try{if(!quiet)status('일보·장비·사진 업로드 중…');const data=await snapshot();const payload=JSON.stringify(data);if(payload.length>30*1024*1024)throw Error('첨부 사진이 많아 30MB를 초과했습니다. 사진 용량을 줄여 주세요.');const updated=new Date().toISOString();await api('/rest/v1/user_snapshots?on_conflict=user_id',{method:'POST',body:{user_id:userId,payload:data,updated_at:updated},extra:{Prefer:'resolution=merge-duplicates,return=minimal'}});lastRemote=updated;status('클라우드 저장 완료 · '+new Date().toLocaleString('ko-KR'));}catch(e){status('업로드 실패: '+e.message)}finally{busy=false}}
+async function download(ask=true){if(!token){status('먼저 로그인하세요.');return}if(busy)return;if(ask&&!confirm('현재 기기의 일보·장비 내역을 클라우드 데이터로 교체합니다. 계속할까요?'))return;busy=true;try{status('클라우드 자료 가져오는 중…');const rows=await api('/rest/v1/user_snapshots?select=payload,updated_at&user_id=eq.'+encodeURIComponent(userId));if(!rows.length){status('클라우드에 저장된 자료가 없습니다. PC에서 먼저 업로드하세요.');return}await restore(rows[0].payload);lastRemote=rows[0].updated_at;status('동기화 완료 · '+new Date().toLocaleString('ko-KR'))}catch(e){status('가져오기 실패: '+e.message)}finally{busy=false}}
+function schedule(){if(!token)return;clearTimeout(uploadTimer);uploadTimer=setTimeout(()=>upload(true),1200)}
+$('cloudLogin').onclick=login;$('cloudLogout').onclick=()=>{token='';userId='';sessionStorage.removeItem('cloudSession');status('로그아웃했습니다.')};$('cloudUpload').onclick=()=>upload(false);$('cloudDownload').onclick=()=>download(true);
+const oldPersist=persist,oldEq=persistEq;
+// 기존 함수를 덮어쓰지 않고 저장 버튼, 장비 등록, 사진 조작 이후 동기화를 예약합니다.
+$('save').addEventListener('click',()=>schedule());$('addEq').addEventListener('click',()=>schedule());$('delete').addEventListener('click',()=>schedule());$('photoInput').addEventListener('change',()=>setTimeout(schedule,1800));
+$('photoGallery').addEventListener('change',schedule);$('photoGallery').addEventListener('click',()=>setTimeout(schedule,400));
+window.addEventListener('focus',async()=>{if(!token||busy)return;try{const rows=await api('/rest/v1/user_snapshots?select=updated_at&user_id=eq.'+encodeURIComponent(userId));if(rows.length&&lastRemote&&rows[0].updated_at>lastRemote)status('다른 기기에서 변경된 자료가 있습니다. 「클라우드 자료 가져오기」를 눌러 반영하세요.')}catch{}});
+try{const saved=JSON.parse(sessionStorage.getItem('cloudSession')||'null');if(saved?.token&&configured()){token=saved.token;userId=saved.userId;status('이전 로그인 세션이 있습니다. 클라우드 가져오기로 최신 자료를 확인하세요.')}else status(configured()?'이메일과 비밀번호로 로그인하세요.':'cloud-config.js에 서버 연결 정보를 입력해야 합니다.')}catch{}
+})();

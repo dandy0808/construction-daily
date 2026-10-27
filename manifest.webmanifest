@@ -1,0 +1,25 @@
+{
+  "name": "현장 공사일보",
+  "short_name": "공사일보",
+  "description": "업체별 작업·사진 기록 및 밴드 게시용 공사일보",
+  "lang": "ko",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f2f5f9",
+  "theme_color": "#1764bb",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
